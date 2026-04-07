@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +40,9 @@ type RuntimeContext struct {
 	resolvedAs core.Identity     // effective identity resolved by framework
 	Factory    *cmdutil.Factory  // injected by framework
 	apiClient  *client.APIClient // lazily initialized, cached
-	larkSDK    *lark.Client      // eagerly initialized in mountDeclarative
+	apiOnce    sync.Once         // synchronizes lazy API client initialization
+	apiErr     error
+	larkSDK    *lark.Client // eagerly initialized in mountDeclarative
 }
 
 // ── Identity ──
@@ -73,17 +76,20 @@ func (ctx *RuntimeContext) Ctx() context.Context { return ctx.ctx }
 
 // getAPIClient returns the cached APIClient, creating it on first use.
 func (ctx *RuntimeContext) getAPIClient() (*client.APIClient, error) {
-	if ctx.apiClient != nil {
-		return ctx.apiClient, nil
+	ctx.apiOnce.Do(func() {
+		ac, err := ctx.Factory.NewAPIClient()
+		if err != nil {
+			ctx.apiErr = err
+			return
+		}
+		// Override config with the one resolved for this context (may differ from Factory's)
+		ac.Config = ctx.Config
+		ctx.apiClient = ac
+	})
+	if ctx.apiErr != nil {
+		return nil, ctx.apiErr
 	}
-	ac, err := ctx.Factory.NewAPIClient()
-	if err != nil {
-		return nil, err
-	}
-	// Override config with the one resolved for this context (may differ from Factory's)
-	ac.Config = ctx.Config
-	ctx.apiClient = ac
-	return ac, nil
+	return ctx.apiClient, nil
 }
 
 // AccessToken returns a valid access token for the current identity.

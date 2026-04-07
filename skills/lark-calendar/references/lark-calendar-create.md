@@ -104,4 +104,4 @@ lark-cli calendar events delete \
 
 - [lark-calendar](../SKILL.md) -- 日历全部命令
 - [lark-shared](../../lark-shared/SKILL.md) -- 认证和全局参数
-- [lark-calendar-suggestion](lark-calendar-suggestion.md) -- 智能推荐空闲时段
+- [lark-calendar-suggestion](lark-calendar-suggestion.md) -- 根据非明确时间或一段时间范围，推荐多个可用时间块方案
