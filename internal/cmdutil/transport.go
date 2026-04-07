@@ -4,7 +4,9 @@
 package cmdutil
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/larksuite/cli/internal/util"
@@ -64,10 +66,42 @@ type UserAgentTransport struct {
 func (t *UserAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	req.Header.Set(HeaderUserAgent, UserAgentValue())
+	for headerKey, headerValue := range extraHeadersFromEnv() {
+		req.Header.Set(headerKey, headerValue)
+	}
 	if t.Base != nil {
 		return t.Base.RoundTrip(req)
 	}
 	return util.FallbackTransport().RoundTrip(req)
+}
+
+func extraHeadersFromEnv() map[string]string {
+	headers := map[string]string{}
+	if key, value, ok := readExtraHeaderEnv("LARKSUITE_CLI_EXTRA_HEADER_KEY", "LARKSUITE_CLI_EXTRA_HEADER_VALUE"); ok {
+		headers[key] = value
+	}
+	for i := 2; ; i++ {
+		keyName := fmt.Sprintf("LARKSUITE_CLI_EXTRA_HEADER_KEY_%d", i)
+		valueName := fmt.Sprintf("LARKSUITE_CLI_EXTRA_HEADER_VALUE_%d", i)
+		key, value, ok := readExtraHeaderEnv(keyName, valueName)
+		if !ok {
+			if os.Getenv(keyName) == "" && os.Getenv(valueName) == "" {
+				break
+			}
+			continue
+		}
+		headers[key] = value
+	}
+	return headers
+}
+
+func readExtraHeaderEnv(keyName, valueName string) (key, value string, ok bool) {
+	key = os.Getenv(keyName)
+	value = os.Getenv(valueName)
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
 }
 
 // SecurityHeaderTransport is an http.RoundTripper that injects CLI security

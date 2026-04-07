@@ -31,6 +31,7 @@ import (
 // RuntimeContext provides helpers for shortcut execution.
 type RuntimeContext struct {
 	ctx        context.Context // from cmd.Context(), propagated through the call chain
+	service    string
 	Config     *core.CliConfig
 	Cmd        *cobra.Command
 	Format     string
@@ -196,7 +197,7 @@ func (ctx *RuntimeContext) StreamPages(method, url string, params map[string]int
 func (ctx *RuntimeContext) buildRequest(method, url string, params map[string]interface{}, data interface{}) client.RawApiRequest {
 	req := client.RawApiRequest{
 		Method: method,
-		URL:    url,
+		URL:    ctx.resolveAPIPath(url),
 		Params: params,
 		Data:   data,
 		As:     ctx.As(),
@@ -205,6 +206,20 @@ func (ctx *RuntimeContext) buildRequest(method, url string, params map[string]in
 		req.ExtraOpts = append(req.ExtraOpts, optFn)
 	}
 	return req
+}
+
+func resolveShortcutOpenBaseURL(brand core.LarkBrand, service string) string {
+	if brand == core.BrandFeishu && service == "contact" {
+		return core.ResolveOnlineEndpoints(brand).Open
+	}
+	return core.ResolveOpenBaseURL(brand)
+}
+
+func (ctx *RuntimeContext) resolveAPIPath(apiPath string) string {
+	if strings.HasPrefix(apiPath, "http://") || strings.HasPrefix(apiPath, "https://") {
+		return apiPath
+	}
+	return strings.TrimRight(resolveShortcutOpenBaseURL(ctx.Config.Brand, ctx.service), "/") + apiPath
 }
 
 func (ctx *RuntimeContext) callRaw(method, url string, params map[string]interface{}, data interface{}) (interface{}, error) {
@@ -227,10 +242,12 @@ func (ctx *RuntimeContext) DoAPI(req *larkcore.ApiReq, opts ...larkcore.RequestO
 	if err != nil {
 		return nil, err
 	}
+	reqCopy := *req
+	reqCopy.ApiPath = ctx.resolveAPIPath(req.ApiPath)
 	if optFn := cmdutil.ShortcutHeaderOpts(ctx.ctx); optFn != nil {
 		opts = append(opts, optFn)
 	}
-	return ac.DoSDKRequest(ctx.ctx, req, ctx.As(), opts...)
+	return ac.DoSDKRequest(ctx.ctx, &reqCopy, ctx.As(), opts...)
 }
 
 // DoAPIAsBot executes a raw Lark SDK request using bot identity (tenant access token),
@@ -241,10 +258,12 @@ func (ctx *RuntimeContext) DoAPIAsBot(req *larkcore.ApiReq, opts ...larkcore.Req
 	if err != nil {
 		return nil, err
 	}
+	reqCopy := *req
+	reqCopy.ApiPath = ctx.resolveAPIPath(req.ApiPath)
 	if optFn := cmdutil.ShortcutHeaderOpts(ctx.ctx); optFn != nil {
 		opts = append(opts, optFn)
 	}
-	return ac.DoSDKRequest(ctx.ctx, req, core.AsBot, opts...)
+	return ac.DoSDKRequest(ctx.ctx, &reqCopy, core.AsBot, opts...)
 }
 
 type cancelOnCloseReadCloser struct {
@@ -298,7 +317,7 @@ func (ctx *RuntimeContext) DoAPIStream(callCtx context.Context, req *larkcore.Ap
 		return nil, err
 	}
 
-	requestURL, err := buildStreamRequestURL(ctx.Config.Brand, req)
+	requestURL, err := buildStreamRequestURL(ctx.Config.Brand, ctx.service, req)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -338,7 +357,7 @@ func (ctx *RuntimeContext) DoAPIStream(callCtx context.Context, req *larkcore.Ap
 	return resp, nil
 }
 
-func buildStreamRequestURL(brand core.LarkBrand, req *larkcore.ApiReq) (string, error) {
+func buildStreamRequestURL(brand core.LarkBrand, service string, req *larkcore.ApiReq) (string, error) {
 	requestURL := req.ApiPath
 	if !strings.HasPrefix(requestURL, "http://") && !strings.HasPrefix(requestURL, "https://") {
 		var pathSegs []string
@@ -357,8 +376,8 @@ func buildStreamRequestURL(brand core.LarkBrand, req *larkcore.ApiReq) (string, 
 			}
 			pathSegs = append(pathSegs, url.PathEscape(pathValue))
 		}
-		endpoints := core.ResolveEndpoints(brand)
-		requestURL = strings.TrimRight(endpoints.Open, "/") + strings.Join(pathSegs, "/")
+		openBaseURL := resolveShortcutOpenBaseURL(brand, service)
+		requestURL = strings.TrimRight(openBaseURL, "/") + strings.Join(pathSegs, "/")
 	}
 	if query := req.QueryParams.Encode(); query != "" {
 		requestURL += "?" + query
@@ -635,7 +654,7 @@ func checkShortcutScopes(as core.Identity, config *core.CliConfig, scopes []stri
 func newRuntimeContext(cmd *cobra.Command, f *cmdutil.Factory, s *Shortcut, config *core.CliConfig, as core.Identity, botOnly bool) (*RuntimeContext, error) {
 	ctx := cmd.Context()
 	ctx = cmdutil.ContextWithShortcut(ctx, s.Service+":"+s.Command, uuid.New().String())
-	rctx := &RuntimeContext{ctx: ctx, Config: config, Cmd: cmd, botOnly: botOnly, resolvedAs: as, Factory: f}
+	rctx := &RuntimeContext{ctx: ctx, service: s.Service, Config: config, Cmd: cmd, botOnly: botOnly, resolvedAs: as, Factory: f}
 
 	sdk, err := f.LarkClient()
 	if err != nil {
