@@ -73,23 +73,52 @@ func getMasterKey(service string, allowCreate bool) ([]byte, error) {
 		return nil, err
 	}
 
-	tmpKeyPath := filepath.Join(dir, "master.key."+uuid.New().String()+".tmp")
-	defer os.Remove(tmpKeyPath)
-
-	if err := os.WriteFile(tmpKeyPath, key, 0600); err != nil {
-		return nil, err
-	}
-
-	// Atomic rename to prevent multi-process master key initialization collision
-	if err := os.Rename(tmpKeyPath, keyPath); err != nil {
-		// If rename fails, another process might have created it. Try reading again.
-		existingKey, readErr := os.ReadFile(keyPath)
-		if readErr == nil && len(existingKey) == masterKeyBytes {
-			return existingKey, nil
+	file, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existingKey, readErr := os.ReadFile(keyPath)
+			if readErr == nil && len(existingKey) == masterKeyBytes {
+				return existingKey, nil
+			}
+			if readErr == nil && len(existingKey) != masterKeyBytes {
+				return nil, errors.New("keychain is corrupted")
+			}
 		}
 		return nil, err
 	}
 
+	writeFailed := true
+	defer func() {
+		if writeFailed {
+			_ = os.Remove(keyPath)
+		}
+	}()
+	if _, err := file.Write(key); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	writeFailed = false
+
+	canonicalKey, err := os.ReadFile(keyPath)
+	if err == nil && len(canonicalKey) == masterKeyBytes {
+		return canonicalKey, nil
+	}
+	if err == nil && len(canonicalKey) != masterKeyBytes {
+		return nil, errors.New("keychain is corrupted")
+	}
+	if err != nil {
+		existingKey, readErr := os.ReadFile(keyPath)
+		if readErr == nil && len(existingKey) == masterKeyBytes {
+			return existingKey, nil
+		}
+		if readErr == nil && len(existingKey) != masterKeyBytes {
+			return nil, errors.New("keychain is corrupted")
+		}
+		return nil, err
+	}
 	return key, nil
 }
 
